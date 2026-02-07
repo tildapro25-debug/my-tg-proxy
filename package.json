@@ -1,0 +1,8 @@
+{
+  "name": "tg-proxy",
+  "version": "1.0.0",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "jsdom": "^22.1.0"
+  }
+}
