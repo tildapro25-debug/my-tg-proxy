@@ -7,61 +7,67 @@ module.exports = async (req, res) => {
 
   try {
     const handle = channel.replace(/https:\/\/t.me\/s\/|https:\/\/t.me\/|@/g, '').split('/')[0].split('?')[0];
-    
-    // Запрашиваем данные с увеличенным таймаутом
     const { data: html } = await axios.get(`https://t.me/s/${handle}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      timeout: 8000 
+      headers: { 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept-Language': 'ru-RU,ru;q=0.9'
+      }
     });
 
-    // Быстрый сплит по сообщениям
     const blocks = html.split('tgme_widget_message_wrap').slice(1);
     const results = [];
     const limitDate = new Date();
     limitDate.setDate(limitDate.getDate() - parseInt(days));
 
-    for (const block of blocks) {
-      try {
-        const dateMatch = block.match(/datetime="([^"]+)"/);
-        if (!dateMatch) continue;
-        
-        const date = new Date(dateMatch[1]);
-        if (date < limitDate) continue;
+    blocks.forEach(block => {
+      const dateMatch = block.match(/datetime="([^"]+)"/);
+      if (!dateMatch) return;
+      const date = new Date(dateMatch[1]);
+      if (date < limitDate) return;
 
-        // 1. Просмотры (быстрый поиск)
-        const views = block.match(/views">([^<]+)</)?.[1] || '0';
-        
-        // 2. Реакции (универсальный быстрый поиск)
-        let reactions = 0;
-        // Ищем цифры в aria-label или в блоках count
-        const rx = block.match(/aria-label="([\d\s]+)reaction/i) || block.match(/count">([^<]+)</);
-        if (rx) {
-          const val = rx[1].replace(/[^\d.KkMm]/g, '');
-          reactions = parseVal(val);
-        }
+      // 1. Просмотры
+      const views = block.match(/views">([^<]+)</)?.[1] || '0';
+      
+      // 2. РЕАКЦИИ (Многоуровневый поиск 2026)
+      let reactions = 0;
 
-        // 3. Текст и Фото
-        const text = (block.match(/js-message_text[^>]*>([\s\S]*?)<\/div>/)?.[1] || '').replace(/<[^>]*>/g, '').trim();
-        const photo = block.match(/background-image:url\('([^']+)'\)/)?.[1] || '';
-        const link = block.match(/href="(https:\/\/t\.me\/[^"]+\/\d+)"/)?.[1] || '';
-
-        results.push({
-          date: date.toISOString(),
-          text: text.substring(0, 500),
-          views,
-          reactions,
-          photo,
-          link
-        });
-      } catch (e) {
-        continue; // Если один пост кривой — идем дальше
+      // Слой 1: Поиск в атрибутах aria-label (самый точный способ для счетчиков)
+      const ariaMatches = block.matchAll(/aria-label="([^"]*?reaction[^"]*?)"/gi);
+      for (const m of ariaMatches) {
+        const num = m[1].match(/\d+/);
+        if (num) reactions += parseInt(num[0]);
       }
-    }
+
+      // Слой 2: Если Слой 1 пуст, ищем через классы счетчиков (K/M формат)
+      if (reactions === 0) {
+        const countMatches = block.matchAll(/_reaction_count">([^<]+)</g);
+        for (const m of countMatches) {
+          reactions += parseVal(m[1]);
+        }
+      }
+
+      // Слой 3: Поиск "общих" реакций в новых блоках 2026 года
+      if (reactions === 0) {
+        const generalMatch = block.match(/class="[^"]*reactions_count">([^<]+)</);
+        if (generalMatch) reactions = parseVal(generalMatch[1]);
+      }
+
+      const text = block.match(/js-message_text[^>]*>([\s\S]*?)<\/div>/)?.[1] || '';
+      const photo = block.match(/background-image:url\('([^']+)'\)/)?.[1] || '';
+      const link = block.match(/class="tgme_widget_message_date" href="([^"]+)"/)?.[1] || '';
+
+      results.push({
+        date: date.toISOString(),
+        text: text.replace(/<[^>]*>/g, '').trim(),
+        views: views,
+        reactions: reactions,
+        photo: photo,
+        link: link
+      });
+    });
 
     res.status(200).json(results);
-  } catch (e) {
-    res.status(200).json([]); // Если ошибка — возвращаем пустой список вместо 500
-  }
+  } catch (e) { res.status(200).json([]); }
 };
 
 function parseVal(v) {
